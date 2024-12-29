@@ -13,7 +13,7 @@ namespace WebScraper.Scrapers
         private int _totalProduseGasite = 0;
         private int _totalNotificariTrimise = 0;
 
-        public EmagScraper(decimal procentMinimReducere = 20)
+        public EmagScraper(decimal procentMinimReducere)
         {
             try
             {
@@ -36,15 +36,10 @@ namespace WebScraper.Scrapers
         {
             try
             {
-                Logger.Info("Start inițializare notificări...");
-
                 _notifyIcon = new NotifyIcon();
-                Logger.Info("NotifyIcon creat");
-
                 _notifyIcon.Icon = SystemIcons.Information;
                 _notifyIcon.Visible = true;
                 _notifyIcon.Text = "eMag Price Monitor";
-                Logger.Info("Proprietăți NotifyIcon setate");
             }
             catch (Exception ex)
             {
@@ -82,60 +77,53 @@ namespace WebScraper.Scrapers
             }
         }
 
-        private async Task<List<Produs>> ExtrageProduseReduse(string categorie, int numaPagini = 2)
+        private async Task<List<Produs>> ExtrageProduseReduse(string categorie)
         {
             var produse = new List<Produs>();
+            int pagina = 1;
+            bool endOfPages = false;
 
-            for (int pagina = 2; pagina <= numaPagini; pagina++)
+            do
             {
-                try
+                pagina++;
+                string url = $"{_baseUrl}/{categorie}/p{pagina}/c";
+
+                var response = await _httpClient.GetAsync(url);
+                if (!response.IsSuccessStatusCode)
                 {
-                    string url = $"{_baseUrl}/{categorie}/p{pagina}/c";
-                    Logger.Info($"Se scanează pagina {pagina}: {url}");
-
-                    var response = await _httpClient.GetAsync(url);
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        Logger.Error($"Eroare HTTP: {response.StatusCode} pentru {url}");
-                        continue;
-                    }
-
-                    var html = await response.Content.ReadAsStringAsync();
-                    var doc = new HtmlAgilityPack.HtmlDocument();
-                    doc.LoadHtml(html);
-
-                    var carduriProduse = doc.DocumentNode.SelectNodes("//div[contains(@class, 'card-item')]");
-                    if (carduriProduse == null)
-                    {
-                        Logger.Info($"Nu s-au găsit produse pe pagina {pagina}");
-                        continue;
-                    }
-
-                    Logger.Info($"S-au găsit {carduriProduse.Count} produse pe pagina {pagina}");
-                    foreach (var card in carduriProduse)
-                    {
-                        try
-                        {
-                            var produs = ExtrageInformatiiProdus(card);
-                            if (produs != null && produs.ProcentReducere > 0)
-                            {
-                                produse.Add(produs);
-                                _totalProduseGasite++;
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.Error("Eroare la procesarea unui produs", ex);
-                        }
-                    }
+                    Logger.Error($"Eroare HTTP: {response.StatusCode} pentru {url}");
+                    continue;
                 }
-                catch (Exception ex)
+                var baseUrl = response.RequestMessage.RequestUri;
+                if (!baseUrl.Segments.Contains($"p{pagina}/"))
                 {
-                    Logger.Error($"Eroare la procesarea paginii {pagina}", ex);
+                    endOfPages = true;
                 }
 
-                await Task.Delay(1000); // Pauză între request-uri
+                var html = await response.Content.ReadAsStringAsync();
+                var doc = new HtmlAgilityPack.HtmlDocument();
+                doc.LoadHtml(html);
+
+                var carduriProduse = doc.DocumentNode.SelectNodes("//div[contains(@class, 'card-item')]");
+
+                foreach (var card in carduriProduse)
+                {
+                    try
+                    {
+                        var produs = ExtrageInformatiiProdus(card);
+                        if (produs != null && produs.ProcentReducere > 0)
+                        {
+                            produse.Add(produs);
+                            _totalProduseGasite++;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error("Eroare la procesarea unui produs", ex);
+                    }
+                }
             }
+            while(!endOfPages);
 
             return produse;
         }
@@ -180,14 +168,6 @@ namespace WebScraper.Scrapers
         {
             try
             {
-
-                // Afișăm în consolă
-                Logger.Success($"\n{tipNotificare}");
-                Logger.Info($"Produs: {produs.Nume}");
-                Logger.Info($"Preț nou: {produs.PretRedus} Lei (redus de la {produs.PretOriginal} Lei)");
-                Logger.Info($"Reducere: {produs.ProcentReducere}%");
-                Logger.Info($"Link: {produs.Link}\n");
-
                 _notifyIcon?.ShowBalloonTip(
                 5000,
                 tipNotificare,
@@ -205,32 +185,22 @@ namespace WebScraper.Scrapers
         {
             try
             {
-                Logger.Info("Începe extragerea informațiilor pentru un nou produs");
-
-                // Selectoare actualizate pentru structura curentă eMag
                 var nume = cardProdus.SelectSingleNode(".//a[contains(@class, 'card-v2-title')]")?.InnerText?.Trim() ??
                           cardProdus.SelectSingleNode(".//div[contains(@class, 'pad-hrz-xs')]//a")?.InnerText?.Trim();
 
                 var linkProdus = cardProdus.SelectSingleNode(".//a[contains(@class, 'card-v2-title')]")?.GetAttributeValue("href", "") ??
                                 cardProdus.SelectSingleNode(".//div[contains(@class, 'pad-hrz-xs')]//a")?.GetAttributeValue("href", "");
 
-                // Extragere prețuri cu selectoare actualizate
                 var pretRedusText = cardProdus.SelectSingleNode(".//p[contains(@class, 'product-new-price')]")?.InnerText?.Trim() ??
                                    cardProdus.SelectSingleNode(".//div[contains(@class, 'product-new-price')]//p")?.InnerText?.Trim();
 
                 var pretOriginalText = cardProdus.SelectSingleNode(".//s[contains(@class, 'rrp-lp30d-content')]")?.InnerText?.Trim() ??
                                       cardProdus.SelectSingleNode(".//span[contains(@class, 'rrp-lp30d-content')]//s")?.InnerText?.Trim();
 
-                Logger.Info($"Nume extras: {nume ?? "null"}");
-
                 if (!string.IsNullOrEmpty(pretRedusText) && !string.IsNullOrEmpty(pretOriginalText))
                 {
-                    // Procesare text prețuri
                     pretRedusText = CurataTextPret(pretRedusText);
                     pretOriginalText = CurataTextPret(pretOriginalText);
-
-                    Logger.Info($"Preț redus procesat: {pretRedusText}");
-                    Logger.Info($"Preț original procesat: {pretOriginalText}");
 
                     if (decimal.TryParse(pretRedusText, out decimal pretRedus) &&
                         decimal.TryParse(pretOriginalText, out decimal pretOriginal))
@@ -246,17 +216,8 @@ namespace WebScraper.Scrapers
                             ProcentReducere = Math.Round(procentReducere, 2)
                         };
 
-                        Logger.Success($"Produs extras cu succes: {produs.Nume} - {produs.PretRedus:N2} Lei");
                         return produs;
                     }
-                    else
-                    {
-                        Logger.Error($"Nu s-au putut converti prețurile: {pretRedusText} / {pretOriginalText}");
-                    }
-                }
-                else
-                {
-                    Logger.Error("Nu s-au găsit prețurile pentru produs");
                 }
             }
             catch (Exception ex)
