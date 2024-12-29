@@ -36,7 +36,7 @@ namespace WebScraper
                     intervalMinute = 30;
                 }
 
-                var scraper = new EmagScraper(procentMinim);
+                var scraper = new AltexScraper(procentMinim);
                 await scraper.MonitorizeazaReduceri(categorie, intervalMinute);
             }
             catch (Exception ex)
